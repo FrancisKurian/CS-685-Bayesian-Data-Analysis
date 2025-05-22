@@ -1,0 +1,571 @@
+---
+title: "CS685 Final Exam Take-Home"
+author: "Francis Kurian"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup_libraries, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(bayesrules)
+library(bayesplot)
+library(rstan)
+library(rstanarm)
+library(ggplot2)
+library(broom.mixed)
+library(dplyr)
+library(pROC)
+library(e1071) 
+library(tidybayes)
+library(tidyverse)
+library(loo)
+library(bayestestR)
+
+```
+
+For this take-home final exam, you are not allowed to receive help from anyone
+except me. You may not talk to other students about the exam problems or look at
+their code. Violations of this policy may result
+in a 0 on the exam, an F for the course, and/or punishment by the Office of
+Academic Integrity. I will be happy to answer queries asking for clarification,
+but will generally leave solving the problems to you. 
+
+Good luck and may the odds ever be in your favor!
+
+-----
+
+#### **Problem 1**
+
+A multiple regression model is being built to predict the survival time in days 
+($Y$) using a set of 4 candidate predictors:
+
+* $X_1$ = blood-clotting index
+* $X_2$ = prognostic measurement
+* $X_3$ = enzyme measurement
+* $X_4$ = liver function measurement
+
+You are given the following data, which I have converted to a data frame for you:
+
+```{r survdata}
+x1 = c(6.7, 5.1, 7.4, 6.5, 7.8, 5.8, 5.7, 3.7, 6, 3.7, 6.3, 6.7, 5.8, 5.8, 7.7,
+       7.4, 6, 3.7, 7.3, 5.6, 5.2, 3.4, 6.7, 5.8, 6.3, 5.8, 5.2, 11.2, 5.2, 5.8,
+       3.2, 8.7, 5, 5.8, 5.4, 5.3, 2.6, 4.3, 4.8, 5.4, 5.2, 3.6, 8.8, 6.5, 3.4,
+       6.5, 4.5, 4.8, 5.1, 3.9, 6.6, 6.4, 6.4, 8.8)
+
+x2 = c(62, 59, 57, 73, 65, 38, 46, 68, 67, 76, 84, 51, 96, 83, 62, 74, 85, 51,
+       68, 57, 52, 83, 26, 67, 59, 61, 52, 76, 54, 76, 64, 45, 59, 72, 58, 51,
+       74, 8, 61, 52, 49, 28, 86, 56, 77, 40, 73, 86, 67, 82, 77, 85, 59, 78)
+  
+x3 = c(81, 66, 83, 41, 115, 72, 63, 81, 93, 94, 83, 43, 114, 88, 67, 68, 28, 41,
+       74, 87, 76, 53, 68, 86, 100, 73, 86, 90, 56, 59, 65, 23, 73, 93, 70, 99,
+       86, 119, 76, 88, 72, 99, 88, 77, 93, 84, 106, 101, 77, 103, 46, 40, 85,
+       72)
+  
+x4 = c(2.59, 1.7, 2.16, 2.01, 4.3, 1.42, 1.91, 2.57, 2.5, 2.4, 4.13, 1.86, 3.95,
+       3.95, 3.4, 2.4, 2.98, 1.55, 3.56, 3.02, 2.85, 1.12, 2.1, 3.4, 2.95, 3.5,
+       2.45, 5.59, 2.71, 2.58, 0.74, 2.52, 3.5, 3.3, 2.64, 2.6, 2.05, 2.85,
+       2.45, 1.81, 1.84, 1.3, 6.4, 2.85, 1.48, 3, 3.05, 4.1, 2.86, 4.55, 1.95,
+       1.21, 2.33, 3.2)
+
+y = c(200, 101, 204, 101, 509, 80, 80, 127, 202, 203, 329, 65, 830, 330, 168, 
+      217, 87, 34, 215, 172, 109, 136, 70, 220, 276, 144, 181, 574, 72, 178, 71,
+      58, 116, 295, 115, 184, 118, 120, 151, 148, 95, 75, 483, 153, 191, 123,
+      311, 398, 158, 310, 124, 125, 198, 313)
+
+df = data.frame(x1=x1,x2=x2,x3=x3,x4=x4,y=y)
+```
+
+#### **1a.)**
+Your supervisor insists that you log transform the dependent variable $Y$. Why
+might this be? Perform this operation and use the log-transformed DV for all 
+subsequent calculations.
+
+#### **Answer 1a.)**
+```{r 1a_skewness}
+cat("Skewness of df$y =", skewness(df$y), "| Skewness of log(df$y) =", skewness(log(df$y)), "\n")
+```
+Skewness of variable y = 2.1, positively skewed and unfit for linear regression.
+Skewness of log(y)= 0.22, more symmetric distribution,residuals/errors are more likely to be normally distributed. 
+So the supervisor is insisting this to ensure the assumption of  homoscedasticity—constant variance of errors
+
+------
+
+#### **1b.)**
+Assuming $\log(Y)\sim Normal(\mu,\sigma)$ with 
+$\mu = \beta_0+\beta_1X_1+\beta_2X_2+\beta_3X_3+\beta_4X_4$,
+use the `rstanarm` package to sample values from the posterior distribution.
+Use weakly informative priors, four chains with 10,000 iterations each (with
+the first half as a burn in) and  random seed `12345`.
+
+#### **Answer 1b.)**
+Please see the model specification and simulation results below:
+
+```{r 1b_model, echo = TRUE, results = "hide", message = FALSE, warning = FALSE}
+
+centered_intercept=mean(log(df$y))
+model_survival <- stan_glm(
+  formula = log(y) ~ x1 + x2 + x3 + x4,
+  data = df,
+  family = gaussian(),
+  prior_intercept = normal(centered_intercept, 5),
+  prior = normal(0, 10,autoscale = TRUE),
+  prior_aux = exponential(0.6,autoscale = TRUE),
+  chains = 4,
+  iter = 5000*2,
+  warmup = 5000,
+  seed = 12345
+)
+
+
+neff_ratio(model_survival)
+rhat(model_survival)
+mcmc_trace(model_survival)
+mcmc_dens_overlay(model_survival)
+
+```                                                                                                                        
+------
+
+#### **1c.)**
+Give point estimates and 95% credible intervals for all parameters (including 
+$\sigma$). Which variables, if any, appear to be unimportant in predicting
+survival time?
+
+#### **Answer 1c.)**
+
+```{r 1c_confidence }
+tidy(model_survival, effects  = c('fixed','aux'),conf.int = T, conf.level = 0.95)
+```
+Results suggest x4 does not have a statistically significant effect on predicting survival time in this model, as the credible interval includes 0 probability.
+------
+
+#### **1d.)**
+Give a point estimate and a 95% credible interval for the expected survival time (**in days**) for a patient with blood-clotting index 6.0, prognostic 
+measurement 65, enzyme measurement 72.00, and liver function measurement 1.50.
+
+#### **Answer 1d.)**
+Point estimate for given data points is below:
+
+```{r 1d_pointEstimate }
+
+new_data <- tibble::tibble(  x1 = 6.0,    x2 = 65,    x3 = 72,     x4 = 1.50  )
+
+# incorporate mean and variance from the simulation for the point estimate
+
+posterior_predictions <- posterior_predict(
+  model_survival,      
+  newdata = new_data
+)
+
+# Compute point estimate and credible interval
+point_estimate <- mean(posterior_predictions)
+credible_interval <- quantile(posterior_predictions, probs = c(0.025, 0.975))
+
+# Conver log Y into original scale using exponents
+tibble::tibble(
+  `Point Estimate (days)` = exp(point_estimate),
+  `Lower 95% CI (days)` = exp(credible_interval[1]),
+  `Upper 95% CI (days)` = exp(credible_interval[2])
+)
+```
+
+------
+
+#### **1e.)**
+Without running another regression model, give a point estimate for the ratio of
+expected survival time (in days) for patients with blood clotting index 7.0 
+compared  to patients with blood clotting index 6.0
+(holding other predictors constant). Explain how you got your answer.
+
+#### **Answer 1e.)**
+
+x1 changing one unit will result in: 
+$$
+e^{\beta_1} = e^{0.158} \approx 1.171
+$$
+The expected survival time for a patient with a blood clotting index of 7.0 is  1.171 times (17.1%) longer than a patient with a blood clotting index of 6.0, holding all other predictors constant.
+
+
+------
+
+#### **1f.)**
+With four predictors, there are a total of 15 possible regression models (4 with
+1 IV, 6 with 2 IVs, 4 with 3 IVs, and 1 with  4 IVs). Estimate the posterior 
+for each of these outcomes and calcuate the expected log-predictive density for
+each model. Then use the `loo_compare` function to compare these results. What
+model would you select and why?
+
+```{r 1f_nmodels,echo = TRUE, results = "hide", message = FALSE,warning = FALSE}
+
+# Define the outcome variable and predictors
+outcome <- "log(y)"  # Change as per your dataset
+predictors <- c("x1", "x2", "x3", "x4")
+
+# Generate all possible combinations of predictors
+model_formulas <- unlist(lapply(1:length(predictors), function(k) {
+  combn(predictors, k, FUN = function(x) paste(outcome, "~", paste(x, collapse = " + ")))
+}))
+
+# Fit models for each formula and store them
+models <- lapply(model_formulas, function(formula) {
+  stan_glm(
+    formula = as.formula(formula),
+    data = df,
+    family = gaussian(),
+    prior_intercept = normal(centered_intercept, 5),
+    prior = normal(0, 10, autoscale = TRUE),
+    prior_aux = exponential(0.6, autoscale = TRUE),
+    chains = 4,
+    iter = 5000*2,
+    seed = 123456
+  )
+})
+
+
+# Compute LOO for all models
+loo_results <- lapply(models, loo)
+loo_compare(loo_results)
+
+
+# Extract the best model
+best_model_index <- which.max(sapply(loo_results, function(x) x$estimates["elpd_loo", "Estimate"]))
+best_model <- models[[best_model_index]]
+# Print summary of the best model
+summary(best_model)
+
+elpd_df <- data.frame(Model_Index = integer(),ELPD = numeric(), SE = numeric(), elpd_diff = numeric(),se_diff = numeric())
+# Loop through each model and compute ELPD
+for (i in seq_along(models)) {
+  model_elpd <- loo(models[[i]])  # Compute LOO for the model
+  elpd_df <- rbind(elpd_df, data.frame(
+    Model_Index = i,
+    ELPD = model_elpd$estimates["elpd_loo", "Estimate"],
+    SE = model_elpd$estimates["elpd_loo", "SE"]
+  ))
+}
+# Print the results
+print(elpd_df)
+
+
+```
+```{r 1f_nmodels1, message = FALSE,warning = FALSE}
+loo_compare(loo_results)
+summary(best_model)
+```
+```{r 1f_nmodels2,message = FALSE,warning = FALSE}
+print(elpd_df)
+```
+
+#### **Answer 1f.)**
+
+From the results above, model #11 is the best as it has the highest ELPD of 38.7. best model exclude variable X4.  loo_compare picks the highest 
+ELPD model and use it as baseline to compare with other models. Somehow function results clearly dont identify the model so I did additional 
+steps to list the model specification and original ELPD and SE scores.
+
+------
+
+#### **Problem 2**
+In our very first example in class, we used the `fake_news` data set from the
+`bayesrules` package, which contains information about 150 news articles, to
+assess the probability that a news story was real or fake news. In this exercise,
+we will expand this approach by building a logistic regression model with `type`,
+(i.e. fake vs. real) as the DV and the following IVs:
+
+* `title_has_excl`: title includes an exclamation point ,
+* `title_words`: the number of words in the title
+* `negative`: negative sentiment rating. 
+* `title_caps_percent`: % of title words capitalized 
+* `text_caps_percent`: % of text words capitalized 
+
+------
+
+#### **2a.)**
+Use the `rstanarm` package to sample values from the posterior distribution.
+You shoud use weakly informative priors, four chains with 10,000 iterations each
+(withthe first half as a burn in) and  random seed `12345`.
+```{r 2a_model,echo = TRUE, results = "hide", message = FALSE,warning = FALSE}
+fake_news_df <- data.frame(
+  type = fake_news$type,
+  title_has_excl = fake_news$title_has_excl,
+  title_words = fake_news$title_words,
+  negative = fake_news$negative,
+  title_caps_percent = fake_news$title_caps_percent,
+  text_caps_percent = fake_news$text_caps_percent
+)
+
+model_fake_news <- stan_glm(
+  formula = type ~ title_has_excl + title_words + negative + title_caps_percent + text_caps_percent,
+  data = fake_news,
+  family = binomial(link = "logit"), 
+  prior_intercept = normal(0, 10),     
+  prior = normal(0, 2.5, autoscale = TRUE),
+  chains = 4,                        
+  iter = 5000*2,                     
+  warmup = 5000,                     
+  seed = 12345                      
+)
+
+prior_summary(model_fake_news)
+neff_ratio(model_fake_news)
+rhat(model_fake_news)
+mcmc_trace(model_fake_news)
+mcmc_dens_overlay(model_fake_news)
+
+```
+#### **Answer 2a.)**
+Table below summarizes the parameter estimates:
+
+```{r 2a_model2, message = FALSE,warning = FALSE}
+tidy(model_fake_news, effects  = c('fixed','aux'),
+     conf.int = T, conf.level = 0.90)
+```
+------
+
+#### **2b.)**
+Which predictors appear to have a significant impact on fake vs. real
+news at the 90% confidence level.
+
+
+#### **Answer 2b.)**
+'title_has_exclTRUE' and 'negative' are the predictors with significant impact at 90% confidence interval. Intercept is also significant. 
+------
+
+#### **2c.)**
+Present and interpret a confusion matrix and classification evaluation metrics
+(accuracy, sensitivity, specificity) for predictions made for each observation 
+in the data set. Repeat with a 10-fold cross-validation and compare the results.
+
+```{r 2c_model, message = FALSE,warning = FALSE}
+set.seed(84735)
+classification_summary(model = model_fake_news, data = fake_news_df, cutoff = 0.5)
+
+classification_summary_cv(model=model_fake_news,data=fake_news_df,cutoff = 0.5,k=10)
+
+```
+
+#### **Answer 2c.)**
+Sensitivity or True Positive rate =76/90 =84%.  True Negative rate or specificity =45% 
+Overall accuracy is at 68.7%.  Cut off used is 0.5 so this means, a probability of 0.5 or above
+are classified as real and rest are classified as fake.
+
+So the model is good at identifying the real articles at 84% however, it struggles in classifying
+fake news.
+
+Since we are interested in fake news classification, we need to look at specificity even at the expense of 
+
+Cross Validation slightly regularized the predictions. Specificity and overall accuracy are slightly lower. 
+
+------
+
+#### **2d.)**
+How do the results change if you change the classification threshold from 0.5 to
+0.8? Create a ROC curve and identify the optimal classification threshold. Also 
+provide and interpret the AUC. 
+
+```{r 2d_model, message = FALSE,warning = FALSE}
+
+set.seed(84735)
+classification_summary(model = model_fake_news, data = fake_news_df, cutoff = 0.8)
+predictions <- posterior_predict(model_fake_news, newdata = fake_news_df)
+pred_mean <- colMeans(predictions)
+
+# Create ROC object
+roc_obj <- roc(fake_news_df$type, pred_mean)
+pROC::auc(roc_obj)  
+# Plot ROC curve
+plot(roc_obj, main = "ROC Curve for Bayesian Fake News Model", 
+     col = "blue", lwd = 2)
+abline(a = 0, b = 1, lty = 2, col = "gray")
+coords(roc_obj, "best", best.method = "youden")
+
+```
+
+#### **Answer 2d.)**
+Specificity has significantly improved from 45% (at 0.5 cutoff) to 95% (at 0.8 cutoff).But with a  
+compromise on overall accuracy.
+
+AUC is 0.767 or 77% area covered under the curve. Which shows an acceptable separation from fake vs real.  
+
+Optimal classification threshold is 0.71 and that's where we achieve 87% specificity. Sensitivity will be 0.58%
+As we can see in the ROC graph, this is the part curve is close to Y axis and steep.  
+
+Look at the ROC curve and identify the point closest to the top-left corner. 
+This point represents the best trade-off between sensitivity and specificity. our objectives and cost tolerance 
+normally drives the cut-off decision.
+
+------
+
+#### **Problem 3**
+In this problem, you will build a regression model for an insurance company to 
+relate the claim amount for an automobile accident (`Y` , in thousands of dollars)
+to the age of the damaged vehicle (`X`, in years). An insurance adjuster tells you
+that  for a specific value of vehicle age `X`, the claim amount follows a Gamma
+distribution with shape hyperparameter $s = e^{\beta_0+\frac{\beta_1}{\sqrt x}}$
+and rate hyperparameter $r=1$. You are also provided with the following data set
+
+```{r 3a_model,echo = TRUE, results = "hide", message = FALSE,warning = FALSE}
+age_veh <- c(2.07,4.28,2.43,4.24,1.52,7.48,1.55,4.95,12.22,0.68,
+             9.58,4.19,9.86,1.95,6.49,9.03,10.62,5.37,2.43,4.80,
+             10.95,0.54,5.34,8.37,11.09,9.16,1.07,9.86,6.11,7.79,
+             0.90,8.05,8.18,9.05,10.26,10.33,8.75,9.60,6.50,6.53,
+             12.14,4.18,3.93,5.39,7.03,3.42,7.63,8.56,1.57,8.74)
+
+claim_amt <- c(32.158,17.333,24.626,34.212,27.237,22.989,29.699,
+               24.645,16.252,40.845,23.610,20.053,18.934,26.811,
+               20.895,18.507,13.311,18.895,32.832,24.098,18.407,
+               50.508,18.726,17.957,25.952,18.037,32.998,19.124,
+               17.817,21.987,36.295,22.137,13.967,26.902,16.806,
+               18.110,27.802,17.959,24.661,21.244,17.785,23.572,
+               28.522,18.877,21.419,22.244,20.068,21.061,29.754,
+               20.512)
+
+# Data list for Stan
+claim_data <- list(
+  N = length(age_veh),
+  x = age_veh,
+  y = claim_amt
+)
+
+
+claim_model <- "
+data {
+  int<lower=0> N;
+  vector[N] x;
+  vector[N] y;
+}
+parameters {
+  real beta_0;
+  real beta_1;
+}
+model {
+  vector[N] shape_param;
+  beta_0 ~ normal(0, 100);
+  beta_1 ~ normal(0, 100);
+
+  for (n in 1:N) {
+    shape_param[n] = exp(beta_0 + beta_1 / sqrt(x[n]));
+  }
+
+  y ~ gamma(shape_param, 1);
+}
+"
+
+# Fit the model using rstan
+claim_sim <- stan(model_code = claim_model, data = claim_data,
+            chains = 4, iter = 4000, warmup = 2000, seed = 12345)
+```
+
+------
+
+#### **3a.)** 
+Use STAN to sample values from the posterior distribution. The priors for both 
+$\beta_0$ and $\beta_1$ should be normal distributions with mean 0 and standard 
+deviation 100. Use four chains with 4,000 iterations each with the first 
+half as a burn in and use random seed `12345`.
+
+This is a more complex model than can be handled with the pre-compiled functions
+in `rstanarm`. Therefore, you must use native `stan` code in the `rstan` package.
+(See Section 9.3.2 in your text for an example for a simpler problem). Also, the
+time for the model to compile (before sampling the posterior via MCMC) was a
+was a bit longer than what we've seen in class. So I found it efficient to compile
+first using the `stan_model` function and then to sample the posterior using the
+`sampling` function - but the old way as shown in Section 9.3.2 will work if you
+don't want to do this. 
+
+#### **Answer 3a.)**
+The code is building a regression model for an insurance claim amount that depends on a predictor (x, the age of the vehicle). The outcome Y is assumed to be drawn from a Gamma distribution whose shape parameter depends on x through a nonlinear transformation. This adds a layer of complexity.A Gamma likelihood with a shape parameter that’s a nonlinear function of the predictors. also two unknown regression parameters (beta_0 and beta_1).
+
+```{r 3a_model2, message = FALSE,warning = FALSE}
+mcmc_trace(claim_sim, pars = c("beta_0","beta_1"))
+mcmc_hist(claim_sim, pars = c("beta_0","beta_1"))
+mcmc_dens(claim_sim, pars = c("beta_0","beta_1"))
+
+```
+------
+
+#### **3b.)**
+Give point estimates and a 90% credible interval for both $\beta_0$ and $\beta_1$.
+
+#### **Answer 3b.)**
+
+Give point estimates and Credible intervals for both $\beta_0$ and $\beta_1$
+
+```{r 3b_model, message = FALSE,warning = FALSE}
+tidy(claim_sim , effects  = c('fixed','aux'),
+     conf.int = T, conf.level = 0.90)
+```
+
+------
+
+#### **3c.)**
+Plot an estimate of the expected value of $Y$ as a function of $X$ for 
+$X = {0.5, 1,1.5, ..., 15}$. Use random seed `12345` and be sure your 
+calculation of the expected value accounts for both the posterior and sampling
+variability. What does this estimated model imply about the relationship between
+the claim amount and the age of the vehicle?
+```{r 3c_model, message = FALSE,warning = FALSE}
+
+parameters <- rstan::extract(claim_sim)
+set.seed(12345)
+X_values <- seq(0.5, 15, by = 0.5)
+
+# E[Y|X] = s = exp(beta_0 + beta_1 / sqrt(X))
+expected_values <- sapply(X_values, function(xi) {
+  exp(parameters$beta_0 + parameters$beta_1 / sqrt(xi))
+})
+
+summary_stats <- t(apply(expected_values, 2, function(vals) {
+  c(mean = mean(vals),
+    lower = quantile(vals, 0.025),
+    upper = quantile(vals, 0.975))
+}))
+
+colnames(summary_stats) <- c("mean", "lower", "upper")
+plot_data <- data.frame(X = X_values,
+                        mean = summary_stats[, "mean"],
+                        lower = summary_stats[, "lower"],
+                        upper = summary_stats[, "upper"])
+
+```
+
+#### **Answer 3c.)**
+
+```{r 3c_model2, message = FALSE,warning = FALSE}
+ggplot(plot_data, aes(x = X, y = mean)) +
+  geom_line(color = "blue", size = 1) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), 
+              alpha = 0.2, fill = "blue") +
+  labs(title = "Estimated Expected Claim Amount vs. Vehicle Age",
+       x = "Age of Vehicle (Years)",
+       y = "Expected Claim Amount (Thousands of Dollars)") +
+  theme_minimal()
+```
+
+
+------
+
+#### **3d.)**
+Use your work in the previous section to estimate the expected claim amount for
+a damaged vehicle that is 10.5 years old.
+
+#### **Answer 3d.)**
+
+```{r 3d_model, message = FALSE,warning = FALSE}
+
+beta_0 <- parameters$beta_0
+beta_1 <- parameters$beta_1
+
+new_x <- 10.5
+new_expected_values <- exp(beta_0 + beta_1 / sqrt(new_x))
+mean_estimate <- mean(new_expected_values)
+ci <- quantile(new_expected_values, c(0.025, 0.975))
+
+mean_estimate
+ci
+
+```
+
+For a damaged vehicle that is 10.5 years old, expected claim amount is $ 19,906.24.  
+
+

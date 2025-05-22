@@ -1,0 +1,469 @@
+---
+title: "CS685 Midterm Take-Home-Francis Kurian"
+author: "Vincent Berardi"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup_libraries, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(bayesrules)
+library(bayesplot)
+library(rstan)
+library(ggplot2)
+library(gridExtra)
+library(grid)
+library(invgamma)
+library(TeachingDemos)
+library(broom.mixed)
+library(dplyr)
+```
+
+### **Problem 1**
+You are an agricultural scientist studying the effect of a specific fertilizer on crop yield for corn. You conduct an experiment with plots treated with this fertilizer and aim to evaluate the variability in crop yield (in tons per hectare). Based on previous studies, you expect the data to be normally distributed with a mean yield $\mu$=3.8 tons per hectare. 
+
+Assume you have collected yield data from a sample of 23 plots that received the fertilizer with the crop yield data as follows:
+
+```{r data}
+yields = c(3.2, 3.5, 3.7, 4.0, 3.9, 3.8, 3.4, 3.1, 4.2, 4.1, 3.6, 3.3, 4.3, 3.9, 4.0, 
+           3.5, 3.8, 4.2, 4.0, 3.7, 3.4, 3.1, 3.6)
+```
+
+The variance is the parameter of interest and you specify the prior $\sigma^2$~InverseGamma(2,1). The normally-distributed data and inverse gamma prior fit into the framework of an Inverse-Gamma-Normal conjugate. After collecting $n$ data points $\vec{y}=\{y_1,y_2,…,y_n\}$, this conjugacy indicates that the  posterior is InverseGamma$\left(a_{prior}+\frac n2,b_{prior}+\frac12\Sigma_i (y_i-\mu)^2\right)$, where $a_{prior}$/$b_{prior}$ correspond to an InverseGamma($a_{prior}$,$b_{prior}$) prior.
+
+------
+
+#### **1a.)** 
+Use the conjugate prior information to specify the posterior.
+
+posterior:InverseGamma$\left(a_{prior}+\frac n2,b_{prior}+\frac12\Sigma_i (y_i-\mu)^2\right)$
+
+```{r 1a}
+a_prior <- 2
+b_prior <- 1
+mu <- 3.8
+n <- length(yields)
+
+# sum of squared deviations
+S <- sum((yields - mu)^2)
+
+#posterior parameters
+a_posterior <- a_prior + n / 2
+b_posterior <- b_prior + (1/2) * S
+
+```
+
+#### **Answer 1a.)**
+
+$\text{InverseGamma}(\text{`r a_posterior`}, \text{`r b_posterior`})$
+
+
+#### **1b.)** 
+Plot the prior and posterior on the same graph. You can use the following 
+code to get started.
+
+#### **Answer 1b.)**
+
+------
+
+```{r 1b, eval=TRUE}
+library(invgamma)
+
+ggplot() + 
+  geom_function(fun = dinvgamma, 
+                args = list(shape = a_prior, rate = b_prior), 
+                aes(color = "Prior")) +
+  geom_function(fun = dinvgamma, 
+                args = list(shape = a_posterior, rate = b_posterior), 
+                aes(color = "Posterior"),) +
+  scale_color_manual(values = c("Prior" = "blue", "Posterior" = "red")) +
+  labs(x = "x", y = "Density",) +
+  theme(legend.position = "bottom")
+
+  
+```
+
+------
+
+#### **1c.)** 
+Calculate an 80% credible interval using both the quantile and highest posterior
+density approaches.
+```{r 1c, eval=TRUE}
+# Quantile-Based 80% Credible Interval
+qinvgamma(c(0.1, 0.9), shape=a_posterior, rate=b_posterior)
+#highest posterior density approach
+hpd(qinvgamma, conf = 0.80,  shape=a_posterior,  rate=b_posterior)
+  
+```
+
+#### **Answer 1c.)**
+- **Quantile-Based 80% Credible Interval: [0.1358148, 0.2754791]**
+
+- **Highest Posterior Density Interval: [0.1222057, 0.2531811]**
+
+#### **1d.)** 
+Suppose you read in _Maize Matters: The Journal of Corn Science & Research_ 
+that $\sigma^2=0.25$ and you decide that $\sigma^2 = 0.25\pm0.05$ is
+close enough to 0.25 to count as consistent with what you read. 
+Perform a hypothesis test to see if your data
+supports this claim. Be sure to include the Bayes Factor. Draw a conclusion 
+about this hypothesis and explain to someone someone who 
+is unfamiliar with Bayesian statistics.
+
+```{r 1d, eval=TRUE}
+# CDF at 0.20 Prior
+prior_prob_lower <- pinvgamma(0.20, a_prior, b_prior) 
+ # CDF at 0.30 Prior
+prior_prob_upper <- pinvgamma(0.30, a_prior, b_prior) 
+# Probability of prior b/w 0.2 and 0.3
+prior_prob <- prior_prob_upper - prior_prob_lower
+
+# Calculate the same for posterior
+posterior_prob_lower <- pinvgamma(0.20, a_posterior, b_posterior)
+posterior_prob_upper <- pinvgamma(0.30, a_posterior, b_posterior)
+posterior_prob <- posterior_prob_upper - posterior_prob_lower
+
+#Bayes Factor
+posterior_prob / prior_prob
+  
+```
+
+#### **Answer 1d.)**
+
+**H0:** The variance is within the range [0.20 - 0.30]  
+**H1:** The variance is not within the range [0.20 - 0.30]  
+
+**Bayes Factor:** 3.18  (Calculations above)
+This favors the null hypothesis that the variance is around the hypothesized value of 0.25 ± 0.05.
+
+------
+
+#### **1e.)** 
+Based on the posterior, what is the expected value of a new crop yield. 
+
+To do this problem, you'll need to first build the posterior predictive 
+model $f(y')$ as outlined in Equation 8.4 in your text. This equation involves evaluating a
+definite integral. When we did this in class, we solved this definite integral
+by hand.(You will do something like this in Problem 2.) But for this problem,
+I'd like you do use numeric integration via R's `integrate()`
+function and evaluate this integrand at various values of $y'$.
+
+The psuedo-code to build $f(y')$ is:
+
+1. Build a function for the integrand as shown in Equation 8.4. This function should have
+two arguments: i.)  $\sigma^2$ value and ii.)$y'$. It's incredibly important that 
+the $\sigma^2$ argument is first, since this is what you are integrating over.
+Also, note that your variable of interest is the variance, but R's Normal 
+Distribution function expects the standard deviation. 
+
+2. Create a grid of 100 $y'$ values from 0..10
+
+3. Loop through your grid and for each $y'$ value, integrate the function you
+built in Step 1 via the `integrate()` function. Please note that you will need 
+pass $y'$ as an argument to `integrate()`, but not $\sigma^2$. Instead define
+lower and upper integration bounds of 0 and 2 for $\sigma^2$.
+
+4. Rescale $f(y')$ as $\frac{f(y')}{\Sigma f(y')}$, which
+turns it into a proper probability function.
+
+5. Plot $y'$ vs. $f(y')$
+
+6. The sum of $y'\cdot f(y')$ is the expected value of the new crop yield. 
+
+#### **Answer 1e.)**
+
+### Posterior Predictive Distribution \( f(y') \)
+
+\[
+f(y') = \int f(y' \mid \sigma^2) \cdot p(\sigma^2 \mid Y) \, d\sigma^2
+\]
+
+Here:
+
+- \( f(y' \mid \sigma^2) \) is the likelihood function of the new observation \( y' \) given a specific variance \( \sigma^2 \).
+- \( p(\sigma^2 \mid Y) \) is the posterior distribution of \( \sigma^2 \), reflects updated variance after observing the data.
+
+```{r 1e, eval=TRUE}
+
+# Define the posterior predictive function integrand as per Equation 8.4
+integrand <- function(sigma2, y_prime) {
+  # Convert sigma^2 to standard deviation (sqrt of variance)
+  sigma <- sqrt(sigma2)
+  dnorm(y_prime, mean = mu, sd = sigma) * dinvgamma(sigma2, shape = a_posterior, scale = b_posterior)
+}
+
+# Create a grid of 100 y' values from 0 to 10
+y_prime_values <- seq(0, 10, length.out = 100)
+f_y_prime <- numeric(length(y_prime_values))
+
+# Loop through each y' value and integrate the function over sigma^2 from 0 to 2
+for (i in seq_along(y_prime_values)) {
+  y_prime <- y_prime_values[i]
+  
+  # Integrate the function, fixing y' and varying sigma^2 from 0 to 2
+  f_y_prime[i] <- integrate(integrand, lower = 0, upper = 2, y_prime = y_prime)$value
+}
+
+# Rescale f(y') to make it a probability density function
+f_y_prime <- f_y_prime / sum(f_y_prime)
+
+# Plot y' vs f(y')
+plot(y_prime_values, f_y_prime, type = "l", col = "blue", xlab = "y'", ylab = "f(y')",
+     main = "Posterior Predictive Density f(y')")
+
+# Calculate the expected value of the new crop yield
+expected_value <- sum(y_prime_values * f_y_prime)
+expected_value
+
+  
+```
+
+#### **Answer 1e.)**
+**Expected Value of New Crop Yield:** 3.8
+
+------
+
+
+#### **1f.)** 
+Estimate the posterior using RStan with 4000 iterations (1st half discarded)
+and 4 chains. Please add `seed=54321` as an argument to the `stan()` function. Use at least 4 diagnostics to demonstrate that you have a 
+fast mixing model and provide an assessment of each diagnostic. Also provide a 
+plot of the estimated versus actual posterior.
+
+```{r 1fa, eval=TRUE}
+# Stan code for the model
+normal_model_code <- "
+data {
+  int<lower=0> N;       
+  real Y[N];         
+}
+parameters {
+  real mu;             
+  real<lower=0> sigma2;  
+}
+model {
+
+  sigma2 ~ inv_gamma(2, 1); 
+  Y ~ normal(mu, sqrt(sigma2));
+}
+"
+
+
+data_list <- list(N = length(yields), Y = yields)
+normal_sim <- stan(model_code = normal_model_code, data = data_list, chains = 4, iter = 4000, seed = 54321)
+                   
+```
+
+#### **Answer 1f.)**
+
+```{r 1fb, eval=TRUE}
+
+# Trace plot
+mcmc_trace(normal_sim, pars = c("mu", "sigma2"), size = 0.1) + ggtitle("Trace Plot for mu and sigma2")
+
+# Density plot
+mcmc_dens(normal_sim, pars = c("mu", "sigma2")) + ggtitle("Density Plot for mu and sigma2")
+
+
+# R-hat and effective sample size
+summary_stats <- summary(normal_sim)$summary
+rhat_values <- summary_stats[, "Rhat"]
+n_eff <- summary_stats[, "n_eff"]
+
+# Display R-hat and n_eff diagnostics
+print(data.frame(Parameter = rownames(summary_stats), Rhat = rhat_values, Effective_Sample_Size = n_eff))
+
+```
+
+```{r 1fc, eval=TRUE}
+# Extract posterior samples
+stan_posterior_samples <- extract(normal_sim, pars = "mu")$mu
+
+
+par(mfrow = c(1, 2)) 
+
+# Plot posterior distribution using bayesplot
+mcmc_hist(normal_sim, pars = "mu") + 
+  yaxis_text(TRUE) +
+  ylab("Count") +
+  ggtitle("Posterior Distribution of mu")
+
+# Plot histogram of observed data with overlaid posterior density
+hist(yields, prob = TRUE, xlim = range(c(yields, stan_posterior_samples)), 
+     ylim = c(0, max(density(stan_posterior_samples)$y) * 1.1), 
+     main = "Observed vs Posterior ", xlab = "Yield", col = "lightgrey", 
+     breaks = 10) 
+lines(density(stan_posterior_samples), col = "blue", lwd = 2)
+
+
+```
+
+
+------
+
+#### **1g.)** 
+Repeat steps b.) - e.) for the posterior estimated via RStan. If you use a random number generator for any steps, please execute
+`set.seed(54321)` before running. 
+_(No need to restate the explanation from part d.)_
+
+#### **Answer 1g.)** 
+
+```{r 1ga, eval=TRUE}
+stan_mu_posterior <- mean(stan_posterior_samples)
+S_stan <- sum((yields - stan_mu_posterior)^2)
+
+#posterior parameters using stan simulation
+a_posterior_stan <- a_prior + n / 2
+b_posterior_stan <- b_prior + (1/2) * S_stan
+
+ggplot() + 
+  geom_function(fun = dinvgamma, 
+                args = list(shape = a_prior, rate = b_prior), 
+                aes(color = "Prior")) +
+  geom_function(fun = dinvgamma, 
+                args = list(shape = a_posterior, rate = b_posterior), 
+                aes(color = "Posterior"),) +
+  geom_function(fun = dinvgamma, 
+                args = list(shape = a_posterior_stan, rate = b_posterior_stan), 
+                aes(color = "Posterior Stan"),) +
+  scale_color_manual(values = c("Prior" = "blue", "Posterior" = "red","Posterior Stan" = "black")) +
+  labs(x = "x", y = "Density",) +
+  theme(legend.position = "bottom")
+
+
+```
+```{r 1gb, eval=TRUE}
+# Quantile-Based 80% Credible Interval
+qinvgamma(c(0.1, 0.9), shape=a_posterior_stan, rate=b_posterior_stan)
+#highest posterior density approach
+hpd(qinvgamma, conf = 0.80,  shape=a_posterior_stan,  rate=b_posterior_stan)
+  
+```
+- **Stan Simulation:Quantile-Based 80% Credible Interval: [0.1305975 0.2648967]**
+
+- **Stan Simulation: Highest Posterior Density Interval: [0.1175112 0.2434553]**
+
+```{r 1gc, eval=TRUE}
+
+# Calculate the same for posterior
+posterior_prob_lower_stan <- pinvgamma(0.20, a_posterior_stan, b_posterior_stan)
+posterior_prob_upper_stan <- pinvgamma(0.30, a_posterior_stan, b_posterior_stan)
+posterior_prob_stan <- posterior_prob_upper_stan - posterior_prob_lower_stan
+
+#Bayes Factor
+posterior_prob_stan / prior_prob
+  
+```
+- **Stan Simulation: Bayes Factor: 2.822977 **
+
+```{r 1gd, eval=TRUE}
+
+# Define the posterior predictive function integrand as per Equation 8.4
+integrand <- function(sigma2, y_prime) {
+  # Convert sigma^2 to standard deviation (sqrt of variance)
+  sigma <- sqrt(sigma2)
+  dnorm(y_prime, mean = stan_mu_posterior, sd = sigma) * dinvgamma(sigma2, shape = a_posterior, scale = b_posterior)
+}
+
+# Create a grid of 100 y' values from 0 to 10
+y_prime_values <- seq(0, 10, length.out = 100)
+f_y_prime <- numeric(length(y_prime_values))
+
+# Loop through each y' value and integrate the function over sigma^2 from 0 to 2
+for (i in seq_along(y_prime_values)) {
+  y_prime <- y_prime_values[i]
+  
+  # Integrate the function, fixing y' and varying sigma^2 from 0 to 2
+  f_y_prime[i] <- integrate(integrand, lower = 0, upper = 2, y_prime = y_prime)$value
+}
+
+# Rescale f(y') to make it a probability density function
+f_y_prime <- f_y_prime / sum(f_y_prime)
+
+# Plot y' vs f(y')
+plot(y_prime_values, f_y_prime, type = "l", col = "blue", xlab = "y'", ylab = "f(y')",
+     main = "Posterior Predictive Density f(y')")
+
+# Calculate the expected value of the new crop yield
+expected_value <- sum(y_prime_values * f_y_prime)
+expected_value
+```
+**Stan Simulation: Expected Value of New Crop Yield:3.7** 
+
+### **Problem 2**
+For your homework, you completed Exercise 5.7, where you found that after 
+collecting data $y$, your understanding of $\lambda$, the rate at which goals are 
+scored in the Women's World Cup game, changed from a Gamma(1,0.25) to a
+Gamma(147,52.25). Find an explicit formula for the probability of a new
+value $y'$ based on this posterior, i.e. find $f(y'|posterior)$
+
+------
+
+#### **Answer 2.)**
+Posterior distribution for \( \lambda \) is \( \text{Gamma}(147, 52.25) \). Given this posterior, we want to find the probability distribution for a new observation \( y' \) (the number of goals scored in the next match).
+
+The likelihood of observing \( y' \) goals given \( \lambda \) follows a Poisson distribution:
+
+\[
+y' | \lambda \sim \text{Poisson}(\lambda)
+\]
+
+The probability mass function (PMF) for a Poisson random variable is:
+
+\[
+P(y' | \lambda) = \frac{\lambda^{y'} e^{-\lambda}}{y'!}
+\]
+
+### Derive \( f(y'|\text{posterior}) \)
+To obtain the probability of observing \( y' \) based on \( \lambda \), integrate over \( \lambda \):
+
+\[
+f(y'|\text{posterior}) = \int_0^{\infty} P(y'|\lambda) f(\lambda | \text{data}) \, d\lambda
+\]
+
+where \( f(\lambda | \text{data}) \) is our posterior distribution, which is \( \text{Gamma}(147, 52.25) \).
+
+\[
+f(\lambda | \text{data}) = \frac{s^r}{\Gamma(r)} \lambda^{r - 1} e^{-s \lambda}
+\]
+
+where \( r = 147 \) and \( s = 52.25 \).
+
+The predictive distribution becomes:
+
+\[
+f(y'|\text{posterior}) = \int_0^{\infty} \frac{\lambda^{y'} e^{-\lambda}}{y'!} \cdot \frac{s^r}{\Gamma(r)} \lambda^{r - 1} e^{-s \lambda} \, d\lambda
+\]
+
+### Simplify the Integral
+
+\[
+f(y'|\text{posterior}) = \frac{s^r}{y'! \, \Gamma(r)} \int_0^{\infty} \lambda^{y' + r - 1} e^{-(s + 1) \lambda} \, d\lambda
+\]
+
+The integral is in the form of the Gamma distribution’s normalization factor:
+
+\[
+\int_0^{\infty} \lambda^{y' + a - 1} e^{-(s + 1) \lambda} \, d\lambda = \frac{\Gamma(y' + a)}{(s + 1)^{y' + a}}
+\]
+
+Thus, we have:
+
+\[
+f(y'|\text{posterior}) = \frac{s^r}{y'! \, \Gamma(r)} \cdot \frac{\Gamma(y' + r)}{(s + 1)^{y' + r}}
+\]
+
+Substituting \( r = 147 \) and \( s = 52.25 \):
+
+\[
+f(y'|\text{posterior}) = \frac{\Gamma(y' + 147)}{y'! \, \Gamma(147)} \cdot \frac{52.25^{147}}{(53.25)^{y' + 147}}
+\]
+
+
+
+
+
+
+
